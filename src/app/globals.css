@@ -1,0 +1,115 @@
+@import "tailwindcss";
+
+:root {
+  --ritual-orange: #f97316;
+  --ritual-glow: rgba(249, 115, 22, 0.3);
+  --ritual-dark: #0a0a0a;
+  --ritual-card: #111111;
+  --ritual-border: #1f1f1f;
+  --ritual-text: #a3a3a3;
+  --ritual-accent: #22c55e;
+}
+
+body {
+  background: var(--ritual-dark);
+  font-family: "SF Mono", "Fira Code", "JetBrains Mono", monospace;
+}
+
+/* Glow effects */
+.glow-orange {
+  box-shadow: 0 0 20px var(--ritual-glow), 0 0 40px rgba(249, 115, 22, 0.1);
+}
+
+.glow-text {
+  text-shadow: 0 0 20px var(--ritual-glow);
+}
+
+/* Grid pattern */
+.grid-pattern {
+  background-image: linear-gradient(
+      rgba(249, 115, 22, 0.03) 1px,
+      transparent 1px
+    ),
+    linear-gradient(90deg, rgba(249, 115, 22, 0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* Animated border */
+@keyframes borderGlow {
+  0%,
+  100% {
+    border-color: rgba(249, 115, 22, 0.2);
+  }
+  50% {
+    border-color: rgba(249, 115, 22, 0.5);
+  }
+}
+
+.animate-border-glow {
+  animation: borderGlow 3s ease-in-out infinite;
+}
+
+/* Typing cursor */
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+.cursor-blink {
+  animation: blink 1s step-end infinite;
+}
+
+/* Pulse ring */
+@keyframes pulseRing {
+  0% {
+    transform: scale(0.8);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
+.pulse-ring {
+  animation: pulseRing 1.5s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+}
+
+/* Card hover effect */
+.card-hover {
+  transition: all 0.3s ease;
+}
+
+.card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 30px rgba(249, 115, 22, 0.15);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--ritual-dark);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--ritual-border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ritual-orange);
+}
+
+/* Selection */
+::selection {
+  background: rgba(249, 115, 22, 0.3);
+  color: white;
+}
