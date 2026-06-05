@@ -6,7 +6,7 @@ import { EXAMPLE_PROMPTS, PROMPT_CATEGORIES, type Prompt } from "@/lib/prompts";
 
 // Ritual Chain config
 const RITUAL_CHAIN_ID = 1979;
-const RITUAL_CHAIN_ID_HEX = "0x7b7"; // 1979 in hex
+const RITUAL_CHAIN_ID_HEX = "0x7bb"; // 1979 in hex
 const RITUAL_RPC_URL = "https://rpc.ritualfoundation.org";
 
 // Prompt NFT contract (deployed on Ritual testnet)
