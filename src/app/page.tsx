@@ -318,44 +318,27 @@ export default function Home() {
         method: "eth_gasPrice",
       }) as string;
 
-      // Get nonce
+      // Get nonce explicitly — forces MetaMask to use legacy type 0
       const nonce = await window.ethereum!.request({
         method: "eth_getTransactionCount",
         params: [currentWallet, "latest"],
       }) as string;
 
-      // Build legacy transaction manually
-      const txObj = {
-        nonce,
-        gasPrice: gasPriceHex,
-        gas: gasLimit,
-        to: currentWallet,
-        value: "0x5af3107a4000", // 0.0001 RITUAL
-        data: "0x",
-        chainId: parseInt(RITUAL_CHAIN_ID_HEX, 16),
-      };
-
-      // Sign via MetaMask (eth_signTransaction returns signed raw tx)
-      const signedTx = await window.ethereum!.request({
-        method: "eth_signTransaction",
-        params: [txObj],
-      }) as { raw: string } | string;
-
-      // Broadcast via RPC directly (bypasses MetaMask's EIP-1559 issue)
-      const rawHex = typeof signedTx === "string" ? signedTx : signedTx.raw;
-      const broadcastRes = await fetch(RITUAL_RPC_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "eth_sendRawTransaction",
-          params: [rawHex],
-        }),
-      });
-      const broadcastData = await broadcastRes.json();
-      if (broadcastData.error) throw new Error(broadcastData.error.message || JSON.stringify(broadcastData.error));
-      const txHashResult = broadcastData.result as string;
+      // Send with ALL legacy fields — forces type 0 transaction
+      const txHashResult = await window.ethereum!.request({
+        method: "eth_sendTransaction",
+        params: [
+          {
+            from: currentWallet,
+            to: currentWallet,
+            value: "0x5af3107a4000", // 0.0001 RITUAL
+            gas: gasLimit,
+            gasPrice: gasPriceHex,
+            nonce,
+            chainId: parseInt(RITUAL_CHAIN_ID_HEX, 16),
+          },
+        ],
+      }) as string;
 
       setTxHash(txHashResult);
       setMintSuccess(true);
