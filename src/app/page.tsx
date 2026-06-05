@@ -322,7 +322,7 @@ export default function Home() {
         params: [
           {
             from: currentWallet,
-            to: "0x0000000000000000000000000000000000000000",
+            to: "0x0000000000000000000000000000000000000802", // Ritual LLM precompile
             value: "0x5af3107a4000", // 0.0001 RITUAL
             data: txData,
             gas: gasLimit,
