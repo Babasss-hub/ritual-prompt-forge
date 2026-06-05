@@ -326,7 +326,7 @@ export default function Home() {
           }],
         }) as string;
         const estimatedBigInt = BigInt(estimated);
-        const buffered = estimatedBigInt + (estimatedBigInt * 20n / 100n);
+        const buffered = estimatedBigInt + (estimatedBigInt * BigInt(20) / BigInt(100));
         gasLimit = "0x" + buffered.toString(16);
       } catch {
         // Use default gas limit if estimation fails
