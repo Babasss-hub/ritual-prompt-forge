@@ -377,7 +377,8 @@ export default function Home() {
       let msg = "Transaction failed";
       if (err && typeof err === "object") {
         const e = err as Record<string, unknown>;
-        msg = (e.message as string) || (e.error?.message as string) || JSON.stringify(err);
+        const inner = e.error && typeof e.error === "object" ? (e.error as Record<string, unknown>) : null;
+        msg = (e.message as string) || (inner?.message as string) || JSON.stringify(err);
       } else if (typeof err === "string") {
         msg = err;
       }
