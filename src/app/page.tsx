@@ -259,30 +259,49 @@ export default function Home() {
   const hasPromptToMint = !!(generatedPrompt || selectedPrompt?.prompt);
 
   // REAL on-chain minting via MetaMask
-  const handleMint = useCallback(async () => {
+  // Using regular function (not useCallback) to avoid stale closure issues
+  const handleMint = async () => {
+    // Read current state directly to avoid stale closures
     const promptToMint = generatedPrompt || selectedPrompt?.prompt;
     const titleToMint = selectedPrompt?.title || "Custom Prompt";
     const categoryToMint = selectedPrompt?.category || activeCategory;
 
-    if (!promptToMint) return;
-    if (!walletAddress) {
-      await handleConnectWallet();
-      // Re-check after connection attempt
-      if (!walletAddress) {
-        alert("Please connect your wallet first!");
-      }
+    if (!promptToMint) {
+      alert("Generate or select a prompt first before minting!");
       return;
+    }
+
+    // Check wallet - try to connect if not connected
+    let currentWallet = walletAddress;
+    if (!currentWallet) {
+      await handleConnectWallet();
+      // Re-check state after connection attempt
+      currentWallet = walletAddress;
+      if (!currentWallet) {
+        alert("Please connect your wallet first!");
+        return;
+      }
     }
 
     if (!window.ethereum) {
-      alert("MetaMask not found!");
+      alert("MetaMask not found! Install dari https://metamask.io");
       return;
     }
 
-    // Check chain
-    const chainId = await window.ethereum.request({ method: "eth_chainId" }) as string;
-    if (chainId !== RITUAL_CHAIN_ID_HEX) {
-      await switchToRitualChain();
+    // Check chain - switch if needed, then CONTINUE (don't return)
+    try {
+      const chainId = await window.ethereum.request({ method: "eth_chainId" }) as string;
+      if (chainId !== RITUAL_CHAIN_ID_HEX) {
+        await switchToRitualChain();
+        // Re-check chain after switch
+        const newChainId = await window.ethereum.request({ method: "eth_chainId" }) as string;
+        if (newChainId !== RITUAL_CHAIN_ID_HEX) {
+          alert("Please switch to Ritual Chain (ID: 1979) in MetaMask first!");
+          return;
+        }
+      }
+    } catch {
+      alert("Failed to check/switch chain. Make sure MetaMask is unlocked.");
       return;
     }
 
@@ -292,24 +311,21 @@ export default function Home() {
 
     try {
       // Encode prompt data as transaction data
-      const txData = encodePromptPayload(promptToMint, titleToMint, categoryToMint, walletAddress);
+      const txData = encodePromptPayload(promptToMint, titleToMint, categoryToMint, currentWallet);
 
       // Get current gas price
-      const gasPriceHex = await window.ethereum.request({
+      const gasPriceHex = await window.ethereum!.request({
         method: "eth_gasPrice",
       }) as string;
       const gasPrice = BigInt(gasPriceHex);
-
-      // Estimate gas (0.001 RITUAL for data storage tx)
-      const value = BigInt("1000000000000000"); // 0.001 RITUAL
 
       // Send REAL transaction via MetaMask
       const txHashResult = await window.ethereum!.request({
         method: "eth_sendTransaction",
         params: [
           {
-            from: walletAddress,
-            to: walletAddress, // Self-transfer (stores data on-chain)
+            from: currentWallet,
+            to: currentWallet, // Self-transfer (stores data on-chain)
             value: "0x0", // No value transfer
             data: txData,
             gasPrice: "0x" + gasPrice.toString(16),
@@ -328,8 +344,8 @@ export default function Home() {
         title: titleToMint,
         description: "",
         category: categoryToMint,
-        author: walletAddress,
-        authorName: walletAddress.slice(0, 6) + "..." + walletAddress.slice(-4),
+        author: currentWallet,
+        authorName: currentWallet.slice(0, 6) + "..." + currentWallet.slice(-4),
         likes: 0,
         mints: 1,
         createdAt: Date.now(),
@@ -346,12 +362,14 @@ export default function Home() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Transaction failed";
       if (msg.includes("User rejected")) {
+        alert("Transaction cancelled by user.");
       } else {
+        alert("Transaction failed: " + msg);
       }
     } finally {
       setIsMinting(false);
     }
-  }, [generatedPrompt, selectedPrompt, walletAddress, activeCategory, switchToRitualChain]);
+  };
 
   return (
     <div className="min-h-screen grid-pattern">
