@@ -310,32 +310,52 @@ export default function Home() {
     setMintSuccess(false);
 
     try {
-      // Encode prompt data as transaction data
-      const txData = encodePromptPayload(promptToMint, titleToMint, categoryToMint, currentWallet);
-
-      // Fixed gas limit — no estimation (avoids testnet issues)
+      // Fixed gas limit
       const gasLimit = "0x7A120"; // 500k gas
 
-      // Get current gas price for legacy transaction
+      // Get current gas price
       const gasPriceHex = await window.ethereum!.request({
         method: "eth_gasPrice",
       }) as string;
 
-      // Send mint transaction — legacy type 0 (Ritual Chain doesn't support EIP-1559)
-      const txHashResult = await window.ethereum!.request({
-        method: "eth_sendTransaction",
-        params: [
-          {
-            from: currentWallet,
-            to: currentWallet, // Self-transfer (no data = allowed)
-            value: "0x5af3107a4000", // 0.0001 RITUAL mint fee
-            gas: gasLimit,
-            gasPrice: gasPriceHex,
-            type: "0x0",
-            chainId: RITUAL_CHAIN_ID_HEX,
-          },
-        ],
+      // Get nonce
+      const nonce = await window.ethereum!.request({
+        method: "eth_getTransactionCount",
+        params: [currentWallet, "latest"],
       }) as string;
+
+      // Build legacy transaction manually
+      const txObj = {
+        nonce,
+        gasPrice: gasPriceHex,
+        gas: gasLimit,
+        to: currentWallet,
+        value: "0x5af3107a4000", // 0.0001 RITUAL
+        data: "0x",
+        chainId: parseInt(RITUAL_CHAIN_ID_HEX, 16),
+      };
+
+      // Sign via MetaMask (eth_signTransaction returns signed raw tx)
+      const signedTx = await window.ethereum!.request({
+        method: "eth_signTransaction",
+        params: [txObj],
+      }) as { raw: string } | string;
+
+      // Broadcast via RPC directly (bypasses MetaMask's EIP-1559 issue)
+      const rawHex = typeof signedTx === "string" ? signedTx : signedTx.raw;
+      const broadcastRes = await fetch(RITUAL_RPC_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "eth_sendRawTransaction",
+          params: [rawHex],
+        }),
+      });
+      const broadcastData = await broadcastRes.json();
+      if (broadcastData.error) throw new Error(broadcastData.error.message || JSON.stringify(broadcastData.error));
+      const txHashResult = broadcastData.result as string;
 
       setTxHash(txHashResult);
       setMintSuccess(true);
