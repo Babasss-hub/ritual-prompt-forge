@@ -313,24 +313,8 @@ export default function Home() {
       // Encode prompt data as transaction data
       const txData = encodePromptPayload(promptToMint, titleToMint, categoryToMint, currentWallet);
 
-      // Estimate gas first
-      let gasLimit = "0x7A120"; // Default 500k
-      try {
-        const estimated = await window.ethereum!.request({
-          method: "eth_estimateGas",
-          params: [{
-            from: currentWallet,
-            to: currentWallet,
-            value: "0x0",
-            data: txData,
-          }],
-        }) as string;
-        const estimatedBigInt = BigInt(estimated);
-        const buffered = estimatedBigInt + (estimatedBigInt * BigInt(20) / BigInt(100));
-        gasLimit = "0x" + buffered.toString(16);
-      } catch {
-        // Use default gas limit if estimation fails
-      }
+      // Fixed gas limit — no estimation (avoids testnet issues)
+      const gasLimit = "0x7A120"; // 500k gas
 
       // Send REAL transaction via MetaMask
       const txHashResult = await window.ethereum!.request({
@@ -338,8 +322,8 @@ export default function Home() {
         params: [
           {
             from: currentWallet,
-            to: currentWallet,
-            value: "0x0",
+            to: "0x0000000000000000000000000000000000000000",
+            value: "0x5af3107a4000", // 0.0001 RITUAL
             data: txData,
             gas: gasLimit,
             chainId: RITUAL_CHAIN_ID_HEX,
