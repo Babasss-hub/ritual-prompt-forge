@@ -313,11 +313,24 @@ export default function Home() {
       // Encode prompt data as transaction data
       const txData = encodePromptPayload(promptToMint, titleToMint, categoryToMint, currentWallet);
 
-      // Get current gas price
-      const gasPriceHex = await window.ethereum!.request({
-        method: "eth_gasPrice",
-      }) as string;
-      const gasPrice = BigInt(gasPriceHex);
+      // Estimate gas first
+      let gasLimit = "0x7A120"; // Default 500k
+      try {
+        const estimated = await window.ethereum!.request({
+          method: "eth_estimateGas",
+          params: [{
+            from: currentWallet,
+            to: currentWallet,
+            value: "0x0",
+            data: txData,
+          }],
+        }) as string;
+        const estimatedBigInt = BigInt(estimated);
+        const buffered = estimatedBigInt + (estimatedBigInt * 20n / 100n);
+        gasLimit = "0x" + buffered.toString(16);
+      } catch {
+        // Use default gas limit if estimation fails
+      }
 
       // Send REAL transaction via MetaMask
       const txHashResult = await window.ethereum!.request({
@@ -325,10 +338,10 @@ export default function Home() {
         params: [
           {
             from: currentWallet,
-            to: currentWallet, // Self-transfer (stores data on-chain)
-            value: "0x0", // No value transfer
+            to: currentWallet,
+            value: "0x0",
             data: txData,
-            gasPrice: "0x" + gasPrice.toString(16),
+            gas: gasLimit,
             chainId: RITUAL_CHAIN_ID_HEX,
           },
         ],
@@ -360,11 +373,18 @@ export default function Home() {
       } catch {}
 
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Transaction failed";
-      if (msg.includes("User rejected")) {
+      // Extract detailed error message from MetaMask/provider
+      let msg = "Transaction failed";
+      if (err && typeof err === "object") {
+        const e = err as Record<string, unknown>;
+        msg = (e.message as string) || (e.error?.message as string) || JSON.stringify(err);
+      } else if (typeof err === "string") {
+        msg = err;
+      }
+      if (msg.includes("User rejected") || msg.includes("user rejected")) {
         alert("Transaction cancelled by user.");
       } else {
-        alert("Transaction failed: " + msg);
+        alert("Transaction failed:\n" + msg);
       }
     } finally {
       setIsMinting(false);
