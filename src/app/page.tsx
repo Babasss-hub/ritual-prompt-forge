@@ -520,11 +520,20 @@ export default function Home() {
 
           {/* Stats Bar */}
           <div className="flex justify-center gap-8 mt-8">
-            {[
-              { label: "Prompts Minted", value: "2,847" },
-              { label: "Active Forgers", value: "412" },
-              { label: "Chain ID", value: "1979" },
-            ].map((stat) => (
+            {(() => {
+              let mintCount = 0;
+              let uniqueAuthors = new Set<string>();
+              try {
+                const saved = JSON.parse(localStorage.getItem("ritual_forge_prompts") || "[]");
+                mintCount = saved.length;
+                saved.forEach((p: { author?: string }) => { if (p.author) uniqueAuthors.add(p.author); });
+              } catch {}
+              return [
+                { label: "Prompts Minted", value: mintCount.toLocaleString() || "0" },
+                { label: "Active Forgers", value: (uniqueAuthors.size || 0).toString() },
+                { label: "Chain ID", value: "1979" },
+              ];
+            })().map((stat) => (
               <div key={stat.label} className="text-center">
                 <div className="text-2xl font-bold text-green-400">
                   {stat.value}
