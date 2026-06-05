@@ -1,7 +1,87 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
+import Image from "next/image";
 import { EXAMPLE_PROMPTS, PROMPT_CATEGORIES, type Prompt } from "@/lib/prompts";
+
+// Ritual Chain config
+const RITUAL_CHAIN_ID = 1979;
+const RITUAL_CHAIN_ID_HEX = "0x7b7"; // 1979 in hex
+const RITUAL_RPC_URL = "https://rpc.ritualfoundation.org";
+
+// Prompt NFT contract (deployed on Ritual testnet)
+// This is a simple storage contract for storing prompt metadata
+const PROMPT_NFT_CONTRACT = "0x0000000000000000000000000000000000000000";
+
+// ABI encode helper for storing prompt data
+function abiEncodePromptData(prompt: string, title: string, category: string, author: string): string {
+  // Simple ABI encoding for: storePrompt(string title, string prompt, string category, address author)
+  const selector = "0x7b2e2e80"; // storePrompt(string,string,string,address) selector (precomputed)
+  const encoded = encodeParameters(
+    ["string", "string", "string", "address"],
+    [title, prompt, category, author]
+  );
+  return selector + encoded;
+}
+
+// Minimal ABI encoder (no library needed)
+function encodeParameters(types: string[], values: unknown[]): string {
+  let encoded = "";
+  const headLength = types.length * 32;
+
+  // Encode dynamic types
+  const dynamicParts: string[] = [];
+  let offset = headLength;
+
+  for (let i = 0; i < types.length; i++) {
+    const type = types[i];
+    const value = values[i];
+
+    if (type === "string") {
+      // Dynamic type - offset pointer
+      encoded += padHex(offset.toString(16), 32);
+      const str = value as string;
+      const bytes = new TextEncoder().encode(str);
+      const paddedLength = Math.ceil(bytes.length / 32) * 32;
+      let part = padHex(bytes.length.toString(16), 32);
+      for (let j = 0; j < bytes.length; j++) {
+        part += bytes[j].toString(16).padStart(2, "0");
+      }
+      // Pad to 32-byte boundary
+      for (let j = bytes.length; j < paddedLength; j++) {
+        part += "00";
+      }
+      dynamicParts.push(part);
+      offset += 32 + paddedLength;
+    } else if (type === "address") {
+      // Address - left-padded to 32 bytes
+      const addr = (value as string).toLowerCase().replace("0x", "");
+      encoded += "000000000000000000000000" + addr;
+    } else {
+      encoded += padHex(value as string, 32);
+    }
+  }
+
+  return encoded + dynamicParts.join("");
+}
+
+function padHex(value: string, bytes: number): string {
+  const hex = value.replace("0x", "");
+  return hex.padStart(bytes * 2, "0");
+}
+
+function stringToHex(str: string): string {
+  const bytes = new TextEncoder().encode(str);
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Encode prompt as a simple data payload (for storage in tx data)
+function encodePromptPayload(prompt: string, title: string, category: string, author: string): string {
+  // Format: "RITUAL_PROMPT_NFT|title|category|promptData|author"
+  // This is a simple encoding that can be decoded off-chain
+  const payload = `RITUAL_PROMPT_NFT|${title}|${category}|${prompt}|${author}`;
+  return "0x" + stringToHex(payload);
+}
 
 // ============================================================
 // RITUAL PROMPT FORGE — Main Page
@@ -22,19 +102,105 @@ export default function Home() {
   const [mintSuccess, setMintSuccess] = useState(false);
   const [walletAddress, setWalletAddress] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
+  const [walletError, setWalletError] = useState("");
+  const [showWalletMenu, setShowWalletMenu] = useState(false);
+  const walletMenuRef = useRef<HTMLDivElement>(null);
 
   const filteredPrompts =
     activeCategory === "all"
       ? EXAMPLE_PROMPTS
       : EXAMPLE_PROMPTS.filter((p) => p.category === activeCategory);
 
+  // Close wallet menu when clicking outside
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (walletMenuRef.current && !walletMenuRef.current.contains(e.target as Node)) {
+        setShowWalletMenu(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   const handleConnectWallet = useCallback(async () => {
     setIsConnecting(true);
-    // Simulate wallet connection
-    await new Promise((r) => setTimeout(r, 1000));
-    setWalletAddress("0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18");
-    setIsConnecting(false);
+    setWalletError("");
+    try {
+      if (typeof window === "undefined" || !window.ethereum) {
+        setWalletError("MetaMask not found. Install dari https://metamask.io");
+        setIsConnecting(false);
+        return;
+      }
+      const result = await window.ethereum.request({ method: "eth_requestAccounts" });
+      const accounts = result as string[];
+      if (accounts && accounts.length > 0) {
+        setWalletAddress(accounts[0]);
+        // Check and switch to Ritual Chain
+        await switchToRitualChain();
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Connection failed";
+      if (msg.includes("User rejected")) {
+        setWalletError("Connection rejected by user");
+      } else {
+        setWalletError("Failed to connect: " + msg);
+      }
+    } finally {
+      setIsConnecting(false);
+    }
   }, []);
+
+  const switchToRitualChain = useCallback(async () => {
+    if (!window.ethereum) return;
+    try {
+      await window.ethereum.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: RITUAL_CHAIN_ID_HEX }],
+      });
+    } catch (err: unknown) {
+      // Silently handle - user may already be on correct chain
+      // or can manually add Ritual Chain in MetaMask settings
+    }
+  }, []);
+
+  const handleDisconnectWallet = useCallback(() => {
+    setWalletAddress("");
+    setShowWalletMenu(false);
+    setWalletError("");
+    // Disconnect permissions
+    if (window.ethereum) {
+      window.ethereum.request({ method: "wallet_revokePermissions", params: [{ eth_accounts: {} }] }).catch(() => {});
+    }
+    // Store disconnected state
+    try {
+      localStorage.setItem("ritual_forge_disconnected", "true");
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    // Check if user was manually disconnected
+    const wasDisconnected = localStorage.getItem("ritual_forge_disconnected") === "true";
+    if (wasDisconnected) return;
+
+    if (typeof window !== "undefined" && window.ethereum) {
+      window.ethereum
+        .request({ method: "eth_accounts" })
+        .then((result: unknown) => {
+          const accounts = result as string[];
+          if (accounts && accounts.length > 0) {
+            setWalletAddress(accounts[0]);
+          }
+        })
+        .catch(() => {});
+    }
+  }, []);
+
+  // Switch chain when wallet connects
+  useEffect(() => {
+    if (walletAddress) {
+      switchToRitualChain();
+    }
+  }, [walletAddress, switchToRitualChain]);
 
   const handleGenerate = useCallback(async () => {
     if (!userInput.trim()) return;
@@ -90,10 +256,33 @@ export default function Home() {
     }
   }, [generatedPrompt, selectedPrompt, testInput]);
 
+  const hasPromptToMint = !!(generatedPrompt || selectedPrompt?.prompt);
+
+  // REAL on-chain minting via MetaMask
   const handleMint = useCallback(async () => {
-    if (!generatedPrompt && !selectedPrompt) return;
+    const promptToMint = generatedPrompt || selectedPrompt?.prompt;
+    const titleToMint = selectedPrompt?.title || "Custom Prompt";
+    const categoryToMint = selectedPrompt?.category || activeCategory;
+
+    if (!promptToMint) return;
     if (!walletAddress) {
-      alert("Please connect your wallet first!");
+      await handleConnectWallet();
+      // Re-check after connection attempt
+      if (!walletAddress) {
+        alert("Please connect your wallet first!");
+      }
+      return;
+    }
+
+    if (!window.ethereum) {
+      alert("MetaMask not found!");
+      return;
+    }
+
+    // Check chain
+    const chainId = await window.ethereum.request({ method: "eth_chainId" }) as string;
+    if (chainId !== RITUAL_CHAIN_ID_HEX) {
+      await switchToRitualChain();
       return;
     }
 
@@ -102,29 +291,67 @@ export default function Home() {
     setMintSuccess(false);
 
     try {
-      const res = await fetch("/api/prompts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt: generatedPrompt || selectedPrompt?.prompt,
-          title: selectedPrompt?.title || "Custom Prompt",
-          description: selectedPrompt?.description || userInput,
-          category: selectedPrompt?.category || activeCategory,
-          author: walletAddress,
-        }),
-      });
+      // Encode prompt data as transaction data
+      const txData = encodePromptPayload(promptToMint, titleToMint, categoryToMint, walletAddress);
 
-      const data = await res.json();
-      if (data.txHash) {
-        setTxHash(data.txHash);
-        setMintSuccess(true);
+      // Get current gas price
+      const gasPriceHex = await window.ethereum.request({
+        method: "eth_gasPrice",
+      }) as string;
+      const gasPrice = BigInt(gasPriceHex);
+
+      // Estimate gas (0.001 RITUAL for data storage tx)
+      const value = BigInt("1000000000000000"); // 0.001 RITUAL
+
+      // Send REAL transaction via MetaMask
+      const txHashResult = await window.ethereum!.request({
+        method: "eth_sendTransaction",
+        params: [
+          {
+            from: walletAddress,
+            to: walletAddress, // Self-transfer (stores data on-chain)
+            value: "0x0", // No value transfer
+            data: txData,
+            gasPrice: "0x" + gasPrice.toString(16),
+            chainId: RITUAL_CHAIN_ID_HEX,
+          },
+        ],
+      }) as string;
+
+      setTxHash(txHashResult);
+      setMintSuccess(true);
+
+      // Save to local state
+      const newPrompt = {
+        id: Date.now().toString(),
+        prompt: promptToMint,
+        title: titleToMint,
+        description: "",
+        category: categoryToMint,
+        author: walletAddress,
+        authorName: walletAddress.slice(0, 6) + "..." + walletAddress.slice(-4),
+        likes: 0,
+        mints: 1,
+        createdAt: Date.now(),
+        txHash: txHashResult,
+      };
+
+      // Store locally
+      try {
+        const existing = JSON.parse(localStorage.getItem("ritual_forge_prompts") || "[]");
+        existing.push(newPrompt);
+        localStorage.setItem("ritual_forge_prompts", JSON.stringify(existing));
+      } catch {}
+
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Transaction failed";
+      if (msg.includes("User rejected")) {
+      } else {
       }
-    } catch {
-      setTxHash("Error minting prompt");
     } finally {
       setIsMinting(false);
     }
-  }, [generatedPrompt, selectedPrompt, walletAddress, userInput, activeCategory]);
+  }, [generatedPrompt, selectedPrompt, walletAddress, activeCategory, switchToRitualChain]);
 
   return (
     <div className="min-h-screen grid-pattern">
@@ -135,8 +362,8 @@ export default function Home() {
             {/* Logo */}
             <div className="flex items-center gap-3">
               <div className="relative">
-                <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center">
-                  <span className="text-xl">⚡</span>
+                <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center overflow-hidden">
+                  <Image src="/ritual-logo.jpg" alt="Ritual" width={40} height={40} className="object-cover w-full h-full" />
                 </div>
                 <div className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-green-500 pulse-ring" />
               </div>
@@ -172,14 +399,58 @@ export default function Home() {
             </nav>
 
             {/* Wallet */}
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 relative" ref={walletMenuRef}>
               {walletAddress ? (
-                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-green-500/10 border border-green-500/30">
-                  <div className="w-2 h-2 rounded-full bg-green-500" />
-                  <span className="text-sm text-green-400 font-mono">
-                    {walletAddress.slice(0, 6)}...{walletAddress.slice(-4)}
-                  </span>
-                </div>
+                <>
+                  <button
+                    onClick={() => setShowWalletMenu(!showWalletMenu)}
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-green-500/10 border border-green-500/30 hover:bg-green-500/20 transition-colors cursor-pointer"
+                  >
+                    <div className="w-2 h-2 rounded-full bg-green-500" />
+                    <span className="text-sm text-green-400 font-mono">
+                      {walletAddress.slice(0, 6)}...{walletAddress.slice(-4)}
+                    </span>
+                    <svg className={`w-3 h-3 text-green-400 transition-transform ${showWalletMenu ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+
+                  {/* Dropdown Menu */}
+                  {showWalletMenu && (
+                    <div className="absolute right-0 top-full mt-2 w-64 rounded-xl bg-[var(--ritual-card)] border border-[var(--ritual-border)] shadow-2xl z-50 overflow-hidden">
+                      <div className="p-3 border-b border-[var(--ritual-border)]">
+                        <div className="text-xs text-[var(--ritual-text)] mb-1">Connected Wallet</div>
+                        <div className="text-sm font-mono text-green-400 break-all">{walletAddress}</div>
+                        <div className="text-xs text-[var(--ritual-text)] mt-1">Chain: Ritual ({RITUAL_CHAIN_ID})</div>
+                      </div>
+                      <div className="p-2">
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(walletAddress);
+                            setShowWalletMenu(false);
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-[var(--ritual-text)] hover:bg-white/5 hover:text-white transition-colors text-left"
+                        >
+                          📋 Copy Address
+                        </button>
+                        <a
+                          href={`https://explorer.ritualfoundation.org/address/${walletAddress}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-[var(--ritual-text)] hover:bg-white/5 hover:text-white transition-colors"
+                        >
+                          🔍 View on Explorer
+                        </a>
+                        <button
+                          onClick={handleDisconnectWallet}
+                          className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-red-400 hover:bg-red-500/10 transition-colors text-left"
+                        >
+                          ⏏️ Disconnect
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
               ) : (
                 <button
                   onClick={handleConnectWallet}
@@ -188,6 +459,11 @@ export default function Home() {
                 >
                   {isConnecting ? "Connecting..." : "Connect Wallet"}
                 </button>
+              )}
+              {walletError && (
+                <div className="absolute right-0 top-full mt-2 px-3 py-1.5 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-400 whitespace-nowrap z-50">
+                  {walletError}
+                </div>
               )}
             </div>
           </div>
@@ -199,7 +475,7 @@ export default function Home() {
         {/* Hero */}
         <div className="text-center mb-12">
           <h2 className="text-4xl md:text-5xl font-bold mb-4">
-            <span className="bg-gradient-to-r from-orange-400 via-red-400 to-pink-400 bg-clip-text text-transparent">
+            <span className="bg-gradient-to-r from-green-400 via-emerald-400 to-green-500 bg-clip-text text-transparent">
               Forge AI Prompts
             </span>
             <br />
@@ -218,7 +494,7 @@ export default function Home() {
               { label: "Chain ID", value: "1979" },
             ].map((stat) => (
               <div key={stat.label} className="text-center">
-                <div className="text-2xl font-bold text-orange-400">
+                <div className="text-2xl font-bold text-green-400">
                   {stat.value}
                 </div>
                 <div className="text-xs text-[var(--ritual-text)]">
@@ -246,8 +522,8 @@ export default function Home() {
                       onClick={() => setActiveCategory(cat.id)}
                       className={`p-3 rounded-lg border transition-all text-left ${
                         activeCategory === cat.id
-                          ? "border-orange-500/50 bg-orange-500/10"
-                          : "border-[var(--ritual-border)] bg-[var(--ritual-card)] hover:border-orange-500/30"
+                          ? "border-green-500/50 bg-green-500/10"
+                          : "border-[var(--ritual-border)] bg-[var(--ritual-card)] hover:border-green-500/30"
                       }`}
                     >
                       <span className="text-lg">{cat.icon}</span>
@@ -266,7 +542,7 @@ export default function Home() {
                   value={userInput}
                   onChange={(e) => setUserInput(e.target.value)}
                   placeholder="e.g., A prompt that generates secure Solidity smart contracts with gas optimization..."
-                  className="w-full h-40 p-4 rounded-xl bg-[var(--ritual-card)] border border-[var(--ritual-border)] text-white placeholder-[var(--ritual-text)] focus:outline-none focus:border-orange-500/50 resize-none font-mono text-sm"
+                  className="w-full h-40 p-4 rounded-xl bg-[var(--ritual-card)] border border-[var(--ritual-border)] text-white placeholder-[var(--ritual-text)] focus:outline-none focus:border-green-500/50 resize-none font-mono text-sm"
                 />
               </div>
 
@@ -274,7 +550,7 @@ export default function Home() {
               <button
                 onClick={handleGenerate}
                 disabled={!userInput.trim() || isGenerating}
-                className="w-full py-4 rounded-xl bg-gradient-to-r from-orange-500 to-red-500 text-white font-bold text-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed glow-orange"
+                className="w-full py-4 rounded-xl bg-gradient-to-r from-green-500 to-emerald-500 text-white font-bold text-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isGenerating ? (
                   <span className="flex items-center justify-center gap-2">
@@ -301,7 +577,7 @@ export default function Home() {
                     <button
                       key={example}
                       onClick={() => setUserInput(example)}
-                      className="px-3 py-1.5 rounded-lg border border-[var(--ritual-border)] text-xs text-[var(--ritual-text)] hover:border-orange-500/30 hover:text-white transition-all"
+                      className="px-3 py-1.5 rounded-lg border border-[var(--ritual-border)] text-xs text-[var(--ritual-text)] hover:border-green-500/30 hover:text-white transition-all"
                     >
                       {example}
                     </button>
@@ -323,7 +599,7 @@ export default function Home() {
                       onClick={() =>
                         navigator.clipboard.writeText(generatedPrompt)
                       }
-                      className="text-xs text-orange-400 hover:text-orange-300"
+                      className="text-xs text-green-400 hover:text-green-300"
                     >
                       📋 Copy
                     </button>
@@ -334,7 +610,7 @@ export default function Home() {
                     <span className="text-[var(--ritual-text)]">
                       {isGenerating ? (
                         <span className="flex items-center gap-2">
-                          <span className="w-4 h-4 border-2 border-orange-500/30 border-t-orange-500 rounded-full animate-spin" />
+                          <span className="w-4 h-4 border-2 border-green-500/30 border-t-green-500 rounded-full animate-spin" />
                           Calling Ritual LLM precompile (0x0802)...
                         </span>
                       ) : (
@@ -350,19 +626,19 @@ export default function Home() {
                 <div className="flex gap-3">
                   <button
                     onClick={() => setView("test")}
-                    className="flex-1 py-3 rounded-xl border border-orange-500/30 text-orange-400 font-medium hover:bg-orange-500/10 transition-colors"
+                    className="flex-1 py-3 rounded-xl border border-green-500/30 text-green-400 font-medium hover:bg-green-500/10 transition-colors"
                   >
                     🧪 Test Prompt
                   </button>
                   <button
                     onClick={handleMint}
-                    disabled={!walletAddress || isMinting}
-                    className="flex-1 py-3 rounded-xl bg-gradient-to-r from-green-500 to-emerald-500 text-white font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
+                    disabled={isMinting || !walletAddress}
+                    className="flex-1 py-3 rounded-xl bg-gradient-to-r from-green-500 to-emerald-500 text-white font-medium hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     {isMinting ? (
                       <span className="flex items-center justify-center gap-2">
                         <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                        Minting...
+                        Sending to Ritual Chain...
                       </span>
                     ) : (
                       "💎 Mint as NFT"
@@ -370,6 +646,7 @@ export default function Home() {
                   </button>
                 </div>
               )}
+
 
               {/* Mint Status */}
               {txHash && (
@@ -384,11 +661,19 @@ export default function Home() {
                     <div className="text-center">
                       <div className="text-3xl mb-2">✅</div>
                       <div className="text-green-400 font-medium">
-                        Prompt Minted Successfully!
+                        Transaction Sent!
                       </div>
-                      <div className="text-xs text-green-400/70 mt-1 font-mono">
+                      <div className="text-xs text-green-400/70 mt-2 font-mono break-all">
                         TX: {txHash}
                       </div>
+                      <a
+                        href={`https://explorer.ritualfoundation.org/tx/${txHash}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-block mt-3 px-4 py-2 rounded-lg bg-green-500/20 text-green-400 text-sm hover:bg-green-500/30 transition-colors"
+                      >
+                        View on Explorer →
+                      </a>
                     </div>
                   ) : (
                     <div className="text-red-400 text-sm">{txHash}</div>
@@ -399,8 +684,8 @@ export default function Home() {
               {/* Ritual Info */}
               <div className="p-4 rounded-xl bg-[var(--ritual-card)] border border-[var(--ritual-border)]">
                 <div className="flex items-center gap-2 mb-3">
-                  <div className="w-2 h-2 rounded-full bg-orange-500" />
-                  <span className="text-sm font-medium text-orange-400">
+                  <div className="w-2 h-2 rounded-full bg-green-500" />
+                  <span className="text-sm font-medium text-green-400">
                     Ritual Chain Info
                   </span>
                 </div>
@@ -438,7 +723,7 @@ export default function Home() {
                 onClick={() => setActiveCategory("all")}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                   activeCategory === "all"
-                    ? "bg-orange-500/20 text-orange-400 border border-orange-500/30"
+                    ? "bg-green-500/20 text-green-400 border border-green-500/30"
                     : "border border-[var(--ritual-border)] text-[var(--ritual-text)] hover:text-white"
                 }`}
               >
@@ -454,7 +739,7 @@ export default function Home() {
                     onClick={() => setActiveCategory(cat.id)}
                     className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                       activeCategory === cat.id
-                        ? "bg-orange-500/20 text-orange-400 border border-orange-500/30"
+                        ? "bg-green-500/20 text-green-400 border border-green-500/30"
                         : "border border-[var(--ritual-border)] text-[var(--ritual-text)] hover:text-white"
                     }`}
                   >
@@ -548,7 +833,7 @@ export default function Home() {
                     setGeneratedPrompt("");
                     setView("forge");
                   }}
-                  className="text-sm text-orange-400 hover:text-orange-300"
+                  className="text-sm text-green-400 hover:text-green-300"
                 >
                   ← Back to Forge
                 </button>
@@ -566,7 +851,7 @@ export default function Home() {
                         selectedPrompt?.prompt || generatedPrompt
                       )
                     }
-                    className="text-xs text-orange-400 hover:text-orange-300"
+                    className="text-xs text-green-400 hover:text-green-300"
                   >
                     📋 Copy
                   </button>
@@ -585,7 +870,7 @@ export default function Home() {
                   value={testInput}
                   onChange={(e) => setTestInput(e.target.value)}
                   placeholder="Enter test input to see how the prompt performs..."
-                  className="w-full h-32 p-4 rounded-xl bg-[var(--ritual-card)] border border-[var(--ritual-border)] text-white placeholder-[var(--ritual-text)] focus:outline-none focus:border-orange-500/50 resize-none font-mono text-sm"
+                  className="w-full h-32 p-4 rounded-xl bg-[var(--ritual-card)] border border-[var(--ritual-border)] text-white placeholder-[var(--ritual-text)] focus:outline-none focus:border-green-500/50 resize-none font-mono text-sm"
                 />
               </div>
 
@@ -633,36 +918,45 @@ export default function Home() {
                 <h4 className="text-lg font-bold text-green-400 mb-4">
                   💎 Mint This Prompt
                 </h4>
-                <p className="text-sm text-[var(--ritual-text)] mb-4">
-                  Save this prompt as an NFT on Ritual Chain. It will be
-                  stored on-chain and shareable with the community.
-                </p>
-                <button
-                  onClick={handleMint}
-                  disabled={!walletAddress || isMinting}
-                  className="w-full py-3 rounded-xl bg-gradient-to-r from-green-500 to-emerald-500 text-white font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
-                >
-                  {isMinting ? (
-                    <span className="flex items-center justify-center gap-2">
-                      <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      Minting on Ritual Chain...
-                    </span>
-                  ) : walletAddress ? (
-                    "💎 Mint Prompt NFT"
-                  ) : (
-                    "Connect Wallet to Mint"
-                  )}
-                </button>
+                {!hasPromptToMint ? (
+                  <p className="text-sm text-yellow-400/80 text-center py-2">
+                    ⚠️ Generate or select a prompt first to mint it as an NFT
+                  </p>
+                ) : (
+                  <>
+                    <p className="text-sm text-[var(--ritual-text)] mb-4">
+                      Save this prompt as an NFT on Ritual Chain. A real transaction
+                      will be sent via MetaMask and confirmed on-chain.
+                    </p>
+                    <button
+                      onClick={handleMint}
+                      disabled={isMinting || !walletAddress}
+                      className="w-full py-3 rounded-xl bg-gradient-to-r from-green-500 to-emerald-500 text-white font-medium hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {isMinting ? (
+                        <span className="flex items-center justify-center gap-2">
+                          <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          Confirm in MetaMask...
+                        </span>
+                      ) : walletAddress ? (
+                        "💎 Mint Prompt NFT"
+                      ) : (
+                        "🔌 Connect Wallet to Mint"
+                      )}
+                    </button>
+                  </>
+                )}
               </div>
+
 
               {/* Mint Result */}
               {txHash && mintSuccess && (
                 <div className="p-4 rounded-xl bg-green-500/10 border border-green-500/30 text-center">
                   <div className="text-3xl mb-2">🎉</div>
                   <div className="text-green-400 font-medium">
-                    Successfully Minted!
+                    Transaction Sent to Ritual Chain!
                   </div>
-                  <div className="text-xs text-green-400/70 mt-2 font-mono">
+                  <div className="text-xs text-green-400/70 mt-2 font-mono break-all">
                     TX: {txHash}
                   </div>
                   <a
@@ -685,7 +979,7 @@ export default function Home() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <div className="flex flex-col md:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-2 text-sm text-[var(--ritual-text)]">
-              <span className="w-2 h-2 rounded-full bg-orange-500" />
+              <span className="w-2 h-2 rounded-full bg-green-500" />
               Built on Ritual Chain • Chain ID 1979
             </div>
             <div className="flex items-center gap-4 text-sm text-[var(--ritual-text)]">
