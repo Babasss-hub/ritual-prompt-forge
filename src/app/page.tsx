@@ -316,15 +316,14 @@ export default function Home() {
       // Fixed gas limit — no estimation (avoids testnet issues)
       const gasLimit = "0x7A120"; // 500k gas
 
-      // Send REAL transaction via MetaMask
+      // Send mint transaction — plain value transfer (prompt stored in localStorage linked to tx hash)
       const txHashResult = await window.ethereum!.request({
         method: "eth_sendTransaction",
         params: [
           {
             from: currentWallet,
-            to: "0x0000000000000000000000000000000000000802", // Ritual LLM precompile
-            value: "0x5af3107a4000", // 0.0001 RITUAL
-            data: txData,
+            to: "0x0000000000000000000000000000000000000000",
+            value: "0x5af3107a4000", // 0.0001 RITUAL mint fee
             gas: gasLimit,
             chainId: RITUAL_CHAIN_ID_HEX,
           },
