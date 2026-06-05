@@ -327,7 +327,7 @@ export default function Home() {
         params: [
           {
             from: currentWallet,
-            to: "0x0000000000000000000000000000000000000000",
+            to: currentWallet, // Self-transfer (no data = allowed)
             value: "0x5af3107a4000", // 0.0001 RITUAL mint fee
             gas: gasLimit,
             gasPrice: gasPriceHex,
