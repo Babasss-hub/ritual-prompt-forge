@@ -316,7 +316,12 @@ export default function Home() {
       // Fixed gas limit — no estimation (avoids testnet issues)
       const gasLimit = "0x7A120"; // 500k gas
 
-      // Send mint transaction — plain value transfer (prompt stored in localStorage linked to tx hash)
+      // Get current gas price for legacy transaction
+      const gasPriceHex = await window.ethereum!.request({
+        method: "eth_gasPrice",
+      }) as string;
+
+      // Send mint transaction — legacy type 0 (Ritual Chain doesn't support EIP-1559)
       const txHashResult = await window.ethereum!.request({
         method: "eth_sendTransaction",
         params: [
@@ -325,6 +330,8 @@ export default function Home() {
             to: "0x0000000000000000000000000000000000000000",
             value: "0x5af3107a4000", // 0.0001 RITUAL mint fee
             gas: gasLimit,
+            gasPrice: gasPriceHex,
+            type: "0x0",
             chainId: RITUAL_CHAIN_ID_HEX,
           },
         ],
